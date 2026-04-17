@@ -1,41 +1,149 @@
-# Model Card: CTR-GPBO (v2.1)
-**Model Date:** April 2026 | **Version:** 2.1 | **Type:** Bayesian Optimisation
+# Model Card: Heuristic Sequential BBO Optimisation Strategy
 
----
+## 1. Overview
 
-## Model Overview
-The **Constrained-Trust-Region Gaussian Process Bayesian Optimiser (CTR-GPBO)** is a sample-efficient optimisation framework designed for high-dimensional black-box functions. It was specifically developed to handle "cliff-edge" boundary conditions and non-stationary noise in 2D to 8D search spaces within a strict 20-query budget.
+**Name:** Heuristic Sequential BBO Optimisation Strategy  
+**Type:** Iterative black-box optimisation workflow  
+**Version:** v1.0
 
-## Intended Use
-* **Primary Task:** Global optimisation of expensive-to-evaluate black-box functions.
-* **Target Scenarios:** Engineering design, chemical yield optimisation, and hyperparameter tuning where $N \le 20$.
-* **Out-of-Scope:** High-throughput screening where function evaluations are cheap/fast (Random Search or Hyperband are preferred).
+This is not a single trained predictive model. It is a structured query-selection approach for optimising eight unknown black-box functions under a strict evaluation budget. The approach uses historical query-output pairs from previous rounds to decide the next query point for each function.
 
-## Optimization Strategy & Evolution
-The model underwent a three-phase evolution over 11 weeks of deployment:
-1.  **Global Scouting (Weeks 1–5):** Used Matérn 5/2 kernels and high-jitter Acquisition Functions to map the global landscape and identify "Islands of Success.". There was resonable success in some functions. 
-2.  **Framework Stress Test (Weeks 7–8):** Integrated HEBO and Optuna. This phase identified critical failure modes: these advanced models overfit to noise in sparse 4D and 6D spaces, leading to "cliff hits.". New techniques tried were failures due to limited data points.
-3.  **Surgical Recovery (Weeks 9–11):** Transitioned to a **Trust Region** approach. The model "anchored" searches within a 1% radius of historical peaks and "froze" low-sensitivity dimensions to maximize precision on "Master Knobs.". This has been working resonably well
+The workflow is best described as a practical, sequential optimisation strategy rather than a formal surrogate-based optimiser. It combines trend tracking, local refinement, and selective resets toward earlier best regions when later exploit steps perform worse.
 
+## 2. Intended Use
 
+### Suitable for
+- sequential black-box optimisation problems
+- low-budget query settings where each evaluation is expensive
+- bounded continuous search spaces in `[0,1]^d`
+- educational or research settings where decision transparency matters
+- iterative optimisation tasks where local improvements can inform the next step
 
-## Performance & Metrics
-Performance is measured by the **Best Observed Value (Max $y$)** and **Stability (Minimizing Regret)**.
+### Not suitable for
+- claiming guaranteed global optimality
+- settings requiring calibrated uncertainty estimates
+- high-dimensional optimisation where broad space coverage is essential
+- safety-critical deployment without stronger validation and automation
+- categorical, constrained, or mixed-variable search spaces without modification
 
-| Function | Complexity | Baseline ($y_0$) | **Week 11 Peak ($y_{max}$)** | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **F5: Chemical Yield** | 4D | 1088.85 | **2808.85** | **Summit Reached** |
-| **F7: 6D Physics** | 6D | 1.36 | **2.61** | **Breakthrough** |
-| **F8: 8D Architect** | 8D | 9.97 | **9.992** | **Plateau** |
-| **F1: Radiation** | 2D | 0.03 | **0.603** | **Optimal** |
+## 3. Details of the Approach
 
-## Assumptions & Limitations
-* **Stationarity Assumption:** The model assumes function smoothness is consistent across the space. It may struggle with heteroscedastic noise (observed in Function 2).
-* **Exploitation Bias:** The model is heavily biased toward local refinement in final rounds, potentially missing global optima in completely unexplored quadrants.
-* **Sample Sparsity:** In 6-8D space, 20-40 points represent a significant "Curse of Dimensionality" challenge, making the model reliant on strong Gaussian priors.
+### Summary of strategy
+Across ten rounds, the optimisation strategy evolved from broad exploration to increasingly cautious exploitation.
 
+- **Rounds 1–2:** broad region-finding and simple exploratory moves
+- **Rounds 3–5:** more local exploitation around high-performing points
+- **Rounds 6–8:** function-specific adjustments depending on stability and trend direction
+- **Rounds 9–10:** very small exploit steps for plateauing functions and resets toward earlier best regions when recent drift underperformed
 
+### Main decision logic
+The strategy makes decisions using a small set of practical rules:
 
-## Ethical Considerations
-* **Transparency:** Detailed model cards prevent "Black-Box Obscurity." By documenting failures (like the Week 8 regressions), we provide a roadmap for future practitioners.
-* **Environmental Impact:** Prioritizing sample efficiency (20 queries) over exhaustive search reduces the carbon footprint associated with massive GPU-intensive optimisation.
+1. **If recent local moves improve the output, continue exploiting nearby.**
+2. **If gains become very small, reduce the step size.**
+3. **If newer moves perform worse than an earlier nearby point, move back toward the best historical region.**
+4. **If a function shows a strong monotonic trend, continue in that direction cautiously.**
+5. **If the function appears unstable, avoid large outward steps and prioritise stability over exploration.**
+
+### How the approach evolved
+The biggest change over time was not a switch to a more complex model, but a shift in how strongly historical outputs influenced the next move.
+
+Earlier rounds used relatively simple intuition about promising regions. Later rounds relied much more on:
+- best-so-far tracking
+- trend direction
+- step-size control
+- recognising plateau behaviour
+- distinguishing between steady improvers and unstable functions
+
+This made the optimisation process more conservative and more locally focused as the data set grew.
+
+## 4. Performance
+
+### Performance metrics used
+The main metrics used to assess performance were:
+- **best-so-far output per function**
+- **week-to-week output change**
+- **trend consistency in local regions**
+- **evidence of plateauing versus continued improvement**
+
+### Summary of results
+From the observed query-output history through Week 9:
+
+- **Function 5** showed the clearest and strongest monotonic improvement, rising from approximately **451.57** in Week 1 to **2090.23** by Week 9.
+- **Function 4** improved from **-5.74** in Week 1 to **-3.42** in Week 9.
+- **Functions 1 and 8** improved, but later rounds suggested diminishing returns and near-plateau behaviour.
+- **Functions 2, 3, 6, and 7** showed that the strongest local region was not always the most recent one, meaning later exploit moves sometimes underperformed earlier nearby queries.
+
+### Interpretation
+The strategy performed best on functions where local refinement kept giving consistent gains. It performed less reliably on functions where the best region was narrow, unstable, or not strongly supported by the later exploit path.
+
+## 5. Assumptions and Limitations
+
+### Main assumptions
+This optimisation strategy depends on several assumptions:
+
+- local improvement is a useful signal for the next move
+- nearby strong regions are worth refining further
+- recent history contains enough information to guide the next query
+- the functions are stable enough that small directional steps have meaning
+- local exploit behaviour is often more useful than broad exploration after several rounds
+
+### Main limitations
+The approach has important limitations:
+
+- it does **not** produce calibrated uncertainty estimates
+- it becomes increasingly biased toward already promising local regions
+- large parts of the search space remain underexplored
+- higher-dimensional functions are still difficult to reason about confidently
+- it is partly heuristic, so full reproducibility depends on keeping the reasoning notes alongside the raw data
+
+### Failure modes
+Potential failure modes include:
+- overcommitting to local patterns that reflect noise or narrow ridges
+- missing better regions because exploration was reduced too early
+- assuming a smooth local trend where the function is actually irregular
+- plateauing near a local optimum without enough evidence about unexplored areas
+
+## 6. Ethical Considerations
+
+Although this is a synthetic optimisation task rather than a human-impact predictive model, transparency still matters.
+
+Documenting:
+- which query points were tested,
+- what outputs were returned,
+- how the next query was chosen,
+- and what assumptions shaped the decision
+
+helps make the workflow reproducible and easier to critique.
+
+This is important because iterative optimisation can otherwise look more objective than it really is. In practice, the strategy includes judgment calls about step size, local trust, and when to reset toward earlier best points. Writing those decisions down makes the process more honest and easier to adapt in future work.
+
+In real-world optimisation settings, that same transparency would matter for accountability, auditing, and safe adaptation under uncertainty.
+
+## 7. Strengths and Weaknesses
+
+### Strengths
+- simple and easy to explain
+- directly grounded in the observed query-output history
+- adapts over time as the function behaviour becomes clearer
+- works reasonably well under very limited evaluation budgets
+- supports round-by-round reflection and reproducibility when documented carefully
+
+### Weaknesses
+- limited exploration in later rounds
+- no formal surrogate uncertainty
+- sensitive to local path dependence
+- difficult to generalise beyond the current capstone setup
+- less reliable in higher dimensions or highly irregular landscapes
+
+## 8. Is More Detail Needed?
+
+At this stage, this structure is sufficient because it explains:
+- what the approach is,
+- how it makes decisions,
+- what metrics were used,
+- what assumptions it relies on,
+- and where it may fail.
+
+More detail could be useful later if the workflow becomes more formal, for example by adding a Gaussian Process surrogate, an automated acquisition rule, or a more explicit code-based optimiser. For the current project stage, the card is intended to be clear, readable, and honest rather than overly technical.
+
